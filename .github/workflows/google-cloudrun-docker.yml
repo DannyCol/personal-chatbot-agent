@@ -1,0 +1,76 @@
+name: 'Build and Deploy to Cloud Run'
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: "${{ secrets.GCP_CHAT_PROJECT_ID }}"
+  REGION: "${{ secrets.GCP_CHAT_REGION }}"
+  CLOUD_RUN_SERVICE: "${{ secrets.GCP_CHAT_CR_SERVICE_NAME }}"
+  CLOUD_RUN_DOCKER_TAG: "${{ secrets.GCP_CHAT_REGION }}-docker.pkg.dev/${{ secrets.GCP_CHAT_PROJECT_ID }}/${{ secrets.GCP_CHAT_CR_SERVICE_NAME }}/${{ secrets.GCP_CHAT_CR_SERVICE_NAME }}:${{ github.sha }}"
+
+jobs:
+  deploy-cloud-run:
+    runs-on: 'ubuntu-latest'
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: 'Checkout'
+        uses: 'actions/checkout@v4'
+      # Authenticating via a JSON credentials file.
+      - name: 'Authenticate to Google Cloud'
+        id: 'auth_gcp'
+        uses: '/google-github-actions/auth@v2'
+        with:
+          credentials_json: "${{ secrets.GCP_SA_KEY }}"
+
+      - name: 'Docker Auth'
+        uses: 'docker/login-action@v3' # docker/login-action@v3
+        with:
+          registry: "${{ env.REGION }}-docker.pkg.dev"
+          username: '_json_key'
+          password: "${{ secrets.GCP_SA_KEY }}"
+
+      # This keeps my GCP project id private
+      - name: 'Insert firebaseConfig.ts'
+        # has the code "export const firebaseConfig = {...}"
+        run: echo "$FIREBASE_CONFIG" > frontend/src/firebaseConfig.ts
+        env:
+          FIREBASE_CONFIG: "${{ secrets.firebaseConfig_ts }}"
+
+      - name: 'Node: Setup'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 'Node: Install dependencies'
+        run: cd frontend && npm ci --silent
+
+      - name: 'Node: Build and Move to Backend'
+        run: make build
+
+      - name: 'Build and Push Backend Container'
+        run: |-
+          cd backend
+          docker build -q --tag "${{ env.CLOUD_RUN_DOCKER_TAG }}" . > /dev/null 2>&1
+          docker push -q "${{ env.CLOUD_RUN_DOCKER_TAG }}" > /dev/null 2>&1
+
+      - name: 'Deploy to Cloud Run'
+        uses: 'google-github-actions/deploy-cloudrun@v2'
+        with:
+          service: "${{ env.CLOUD_RUN_SERVICE }}"
+          region: "${{ env.REGION }}"
+          image: "${{ env.CLOUD_RUN_DOCKER_TAG }}"
+          env_vars: |-
+            GCP_CHAT_PROJECT_ID=${{ env.PROJECT_ID }}
+            GCP_CHAT_SECRETS_ID=${{ secrets.GCP_CHAT_SECRETS_ID }}
+            GCP_CHAT_ZONE=${{ secrets.GCP_CHAT_ZONE }}
+            GCP_GKE_REDIS_NODEPORT=${{ secrets.GCP_GKE_REDIS_NODEPORT}}
+          flags: |
+            --service-account=${{ secrets.GCP_CR_SA_EMAIL_PREFIX }}@${{ ENV.PROJECT_ID }}.iam.gserviceaccount.com
+            --verbosity=none

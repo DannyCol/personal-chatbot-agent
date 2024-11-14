@@ -1,0 +1,33 @@
+services:
+  backend:
+    container_name: chatbot-backend
+    build:
+      context: backend/
+      dockerfile: Dockerfile
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/tmp/keys/application_default_credentials.json
+    volumes:
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:/tmp/keys/application_default_credentials.json:ro
+    ports:
+      - 8080:8080
+    networks:
+      - app-network
+
+  frontend:
+    container_name: chatbot-frontend
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    ports:
+      - 5173:5173
+    networks:
+      - app-network
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - 6379:6379
+
+networks:
+  app-network:
+    driver: bridge
